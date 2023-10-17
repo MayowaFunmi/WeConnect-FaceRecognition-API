@@ -23,8 +23,8 @@ namespace FaceRecognition.Controllers
     public class FaceRecognitionController : ControllerBase
     {
         private readonly ILogger<FaceRecognitionController> _logger;
-        string accessId = "AKIAXZZKY5LKZ6YC2P2A";
-        string secretKey = "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";
+        string accessId = "";
+        string secretKey = "";
 
         public FaceRecognitionController(ILogger<FaceRecognitionController> logger)
         {
