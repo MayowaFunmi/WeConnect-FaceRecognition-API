@@ -4,17 +4,17 @@ using Amazon.Rekognition.Model;
 using Amazon.Runtime;
 using Amazon.S3;
 using Amazon.S3.Model;
-
-
-//using Amazon.S3;
-//using Amazon.S3.Model;
+using FaceRecognition.Data;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 using System;
 using System.Collections.ObjectModel;
 using System.IO;
+using System.Net;
 using System.Net.Http;
 using System.Threading.Tasks;
+using WeConnectAPI.DTOs;
 
 namespace FaceRecognition.Controllers
 {
@@ -23,19 +23,22 @@ namespace FaceRecognition.Controllers
     public class FaceRecognitionController : ControllerBase
     {
         private readonly ILogger<FaceRecognitionController> _logger;
-        string accessId = "AKIAXZZKY5LKZ6YC2P2A";
-        string secretKey = "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";
+        private readonly AwsSettings _awsSettings;
 
-        public FaceRecognitionController(ILogger<FaceRecognitionController> logger)
+        public FaceRecognitionController(ILogger<FaceRecognitionController> logger, IOptions<AwsSettings> awsSettings)
         {
             _logger = logger;
+            _awsSettings = awsSettings.Value;
         }
 
-        [HttpGet("compare")]
-        public async Task<IActionResult> CompareTwoFaces()
+        [HttpGet("compare-two-faces")]
+        //c5825824-3c90-4e28-a8af-fc75de0c3f38
+        public async Task<GenericResponses> CompareTwoFaces(string sourceImageUrl, string targetImageUrl)
         {
-            string sourceImageUrl = "https://res.cloudinary.com/affable-digital-services/image/upload/v1693179083/ubvfn5zwhjdx3cz86jjy.jpg";
-            string targetImageUrl = "https://res.cloudinary.com/affable-digital-services/image/upload/v1693179083/ubvfn5zwhjdx3cz86jjy.jpg"; // Replace with your target image URL
+            //string sourceImageUrl = "https://res.cloudinary.com/affable-digital-services/image/upload/v1693179083/ubvfn5zwhjdx3cz86jjy.jpg";
+            //string targetImageUrl = "https://res.cloudinary.com/affable-digital-services/image/upload/v1693179083/ubvfn5zwhjdx3cz86jjy.jpg"; // Replace with your target image URL
+            var accessId = _awsSettings.AccessKey;
+            var secretKey = _awsSettings.SecretKey;
 
             try
             {
@@ -61,22 +64,38 @@ namespace FaceRecognition.Controllers
                 };
 
                 var compareFacesResponse = await rekognitionClient.CompareFacesAsync(compareFacesRequest);
+                float left = 0;
+                float top = 0;
+                float similarity = 0;
 
                 foreach (var match in compareFacesResponse.FaceMatches)
                 {
                     ComparedFace face = match.Face;
                     BoundingBox position = face.BoundingBox;
+                    left = position.Left;
+                    top = position.Top;
+                    similarity = match.Similarity;
                     _logger.LogInformation($"Face at {position.Left} {position.Top} matches with {match.Similarity}% confidence.");
                 }
 
                 _logger.LogInformation($"Found {compareFacesResponse.UnmatchedFaces.Count} face(s) that did not match.");
 
-                return Ok("Comparison completed successfully");
+                return new GenericResponses()
+                {
+                    Status = HttpStatusCode.OK.ToString(),
+                    Message = $"Found {compareFacesResponse.UnmatchedFaces.Count} face(s) that did not match.",
+                    Data = $"Face at {left} {top} matches with {similarity}% confidence.",
+                };
             }
             catch (Exception ex)
             {
                 _logger.LogError($"Error during face comparison: {ex.Message}");
-                return StatusCode(500, "An error occurred during face comparison.");
+                return new GenericResponses()
+                {
+                    Status = HttpStatusCode.BadRequest.ToString(),
+                    Message = $"Faild to compare images: {ex.Message}",
+                    Data = null,
+                };
             }
         }
 
@@ -84,6 +103,8 @@ namespace FaceRecognition.Controllers
         [HttpPost("create-collection")]
         public async Task<IActionResult> CreateCollection(string collectionId)
         {
+            var accessId = _awsSettings.AccessKey;
+            var secretKey = _awsSettings.SecretKey;
             var rekognitionClient = new AmazonRekognitionClient(accessId, secretKey, Amazon.RegionEndpoint.USWest2);
             _logger.LogInformation($"Creating collection: {collectionId}");
 
@@ -101,6 +122,8 @@ namespace FaceRecognition.Controllers
         [HttpGet("decsribe-collection")]
         public async Task<IActionResult> DescribeCollection(string collectionId)
         {
+            var accessId = _awsSettings.AccessKey;
+            var secretKey = _awsSettings.SecretKey;
             var rekognitionClient = new AmazonRekognitionClient(accessId, secretKey, Amazon.RegionEndpoint.USWest2);
             _logger.LogInformation($"Describing collection: {collectionId}");
             try
@@ -127,6 +150,8 @@ namespace FaceRecognition.Controllers
         [HttpPost("create-s3bucket")]
         public async Task<IActionResult> CreateBucket()
         {
+            var accessId = _awsSettings.AccessKey;
+            var secretKey = _awsSettings.SecretKey;
             // Create an Amazon S3 client
             var awsCredentials = new BasicAWSCredentials(accessId, secretKey);
             var config = new AmazonS3Config
@@ -152,12 +177,14 @@ namespace FaceRecognition.Controllers
 
         // add face to collection
         [HttpPost("add-single-face-to-collection")]
-        public async Task<IActionResult> AddSingleFaceToCollection(string bucketName, string collectionId, string imageName)
+        public async Task<GenericResponses> AddSingleFaceToCollection(string bucketName, string collectionId, string imageName)
         {
+            var accessId = _awsSettings.AccessKey;
+            var secretKey = _awsSettings.SecretKey;
             string imageUrl = GetPresignUrl(bucketName, imageName);
             Console.WriteLine("Image url = " + imageUrl);
             Image imageSource = new();
-
+            string faceId = "";
             using (HttpClient client = new())
             {
                 byte[] sourceImageData = await client.GetByteArrayAsync(imageUrl);
@@ -188,13 +215,24 @@ namespace FaceRecognition.Controllers
                 foreach (FaceRecord faceRecord in indexFacesResponse.FaceRecords)
                 {
                     _logger.LogInformation($"Face detected: Faceid is {faceRecord.Face.FaceId}");
+                    faceId = faceRecord.Face.FaceId;
                 }
-                return Ok("Image added to collection");
+                return new GenericResponses()
+                {
+                    Status = HttpStatusCode.OK.ToString(),
+                    Message = "Image added to collection successfully",
+                    Data = faceId,
+                };
             }
             catch (Exception ex)
             {
                 _logger.LogError($"Error creating s3 bucket: {ex.Message}");
-                return StatusCode(500, "s3 bucket creation failed.");
+                return new GenericResponses()
+                {
+                    Status = HttpStatusCode.BadRequest.ToString(),
+                    Message = "Faild to add image",
+                    Data = null,
+                };
             }
         }
 
@@ -222,6 +260,8 @@ namespace FaceRecognition.Controllers
         [HttpGet("search-a-face")]
         public async Task<IActionResult> SearchFacesMatchingImage(string collectionId, string bucketName, string imageName)
         {
+            var accessId = _awsSettings.AccessKey;
+            var secretKey = _awsSettings.SecretKey;
             string imageUrl = GetPresignUrl(bucketName, imageName);
             Console.WriteLine("Image url = " + imageUrl);
             Image imageSource = new();
@@ -267,8 +307,10 @@ namespace FaceRecognition.Controllers
         }
 
         [HttpGet("list-faces-in-a-collection")]
-        public async Task<IActionResult> ListFacesInCollection(string collectionId)
+        public async Task<GenericResponses> ListFacesInCollection(string collectionId)
         {
+            var accessId = _awsSettings.AccessKey;
+            var secretKey = _awsSettings.SecretKey;
             var rekognitionClient = new AmazonRekognitionClient(accessId, secretKey, RegionEndpoint.USWest2);
             var listFacesResponse = new ListFacesResponse();
             _logger.LogInformation($"Faces in collection {collectionId}");
@@ -279,24 +321,34 @@ namespace FaceRecognition.Controllers
                 MaxResults = 2
             };
 
+            List<string> collectionFaces = new();
+
             do
             {
                 listFacesResponse = await rekognitionClient.ListFacesAsync(listFacesRequest);
                 listFacesResponse.Faces.ForEach(face => 
                 {
                     _logger.LogInformation(face.FaceId);
+                    collectionFaces.Add(face.FaceId);
                 });
 
                 listFacesRequest.NextToken = listFacesResponse.NextToken;
             }
             while (!string.IsNullOrEmpty(listFacesResponse.NextToken));
-            return Ok("Faces Retrieved Successfully");
+            return new GenericResponses()
+            {
+                Status = HttpStatusCode.OK.ToString(),
+                Message = $"{collectionFaces.Count} Faces in collection '{collectionId}' retrieved successfully",
+                Data = collectionFaces,
+            };
         }
 
         // ==================== Private Methods ======================
 
         private string GetPresignUrl(string bucketName, string imageName)
         {
+            var accessId = _awsSettings.AccessKey;
+            var secretKey = _awsSettings.SecretKey;
             var s3Client = new AmazonS3Client(accessId, secretKey, RegionEndpoint.USWest2);
             var request = new GetPreSignedUrlRequest
             {
@@ -310,6 +362,8 @@ namespace FaceRecognition.Controllers
         
         private async Task<List<string>> ListFilesInBucket(string bucketName)
         {
+            var accessId = _awsSettings.AccessKey;
+            var secretKey = _awsSettings.SecretKey;
             var fileList = new List<string>();
             var s3Client = new AmazonS3Client(accessId, secretKey, RegionEndpoint.USWest2);
             var request = new ListObjectsV2Request
